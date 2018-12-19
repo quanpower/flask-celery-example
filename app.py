@@ -3,20 +3,30 @@ import random
 import time
 from flask import Flask, request, render_template, session, flash, redirect, \
     url_for, jsonify
-from flask.ext.mail import Mail, Message
-from celery import Celery
+
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy import create_engine
+
+from db import ProductionLine, PLCProtocol, PLCType, DBType, Device
+import json
+from flask_mail import Mail, Message
+from celery import Celery, chain, signature
+import time
 
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'top-secret!'
 
 # Flask-Mail configuration
-app.config['MAIL_SERVER'] = 'smtp.googlemail.com'
-app.config['MAIL_PORT'] = 587
-app.config['MAIL_USE_TLS'] = True
-app.config['MAIL_USERNAME'] = os.environ.get('MAIL_USERNAME')
-app.config['MAIL_PASSWORD'] = os.environ.get('MAIL_PASSWORD')
-app.config['MAIL_DEFAULT_SENDER'] = 'flask@example.com'
+app.config['MAIL_SERVER'] = 'smtp.qq.com'
+app.config['MAIL_PORT'] = 465
+app.config['MAIL_USE_SSL'] = True
+app.config['MAIL_USE_TLS'] = False
+app.config['MAIL_USERNAME'] = '252527676@qq.com'
+# app.config['MAIL_USERNAME'] = os.environ.get('MAIL_USERNAME')
+app.config['MAIL_PASSWORD'] = 'picuyfuvuzgfbhig'
+# app.config['MAIL_PASSWORD'] = os.environ.get('MAIL_PASSWORD')
+app.config['MAIL_DEFAULT_SENDER'] = '252527676@qq.com'
 
 # Celery configuration
 app.config['CELERY_BROKER_URL'] = 'redis://localhost:6379/0'
@@ -29,6 +39,101 @@ mail = Mail(app)
 # Initialize Celery
 celery = Celery(app.name, broker=app.config['CELERY_BROKER_URL'])
 celery.conf.update(app.config)
+
+
+connect = create_engine("mysql+pymysql://root:caojing1010@localhost:3306/damao",
+                        encoding="utf-8",
+                        echo=True)  # 连接数据库，echo=True =>把所有的信息都打印出来
+DBSession = sessionmaker(bind=connect)
+db_session = DBSession()
+
+
+
+@celery.task
+def query_device(device_id):
+    """Background task to send an email with Flask-Mail."""
+    print("------in query device task!-------")
+    device = db_session.query(Device).filter_by(id=device_id).first()
+    #打印实例
+    print(device)
+    print(device.id, device.isPLC)
+    # isPLC?
+    if device.isPLC:
+        print(device.PLCType_id, device.plc_ip, device.PLC_type.name)
+
+        # plcProtocol = queryProtocol.delay(device.PLCType_id)
+        work_flow = chain(queryPLCType.s(device.PLCType_id), queryPLCProtocol.s(), queryParameter.s(), parseParameter.s(), uploadMES.s() )
+        work_flow()
+        print('ok')
+
+        return 'loop over!'
+        # res = queryPLCType.apply_async((device.PLCType_id), link=queryPLCProtocol.s())
+        # print(res.get())
+
+
+
+
+
+
+@celery.task
+def queryPLCType(PLCType_id):
+    """Background task to send an email with Flask-Mail."""
+    print("----in queryPLCType task!-----")
+    plcType = db_session.query(PLCType).filter_by(id=PLCType_id).first()
+    #打印实例
+    print("---plcType:----", plcType)
+    print(plcType.id)
+    print(plcType.PLCProtocol_id)
+
+    time.sleep(0.02)
+
+    return plcType.PLCProtocol_id
+
+
+@celery.task
+def queryPLCProtocol(PLCProtocol_id):
+    """Background task to send an email with Flask-Mail."""
+    print("----in queryPLCProtocol task!-----")
+    plcProtocol = db_session.query(PLCProtocol).filter_by(id=PLCProtocol_id).first()
+    #打印实例
+    print("---PLCProtocol:----", plcProtocol)
+    print(plcProtocol.id)
+    print(plcProtocol.name)
+    time.sleep(0.03)
+
+    return plcProtocol.id
+
+
+
+@celery.task
+def queryParameter(PLCProtocol_id):
+    """Background task to send an email with Flask-Mail."""
+    print("----in queryParameter task!-----")
+
+    time.sleep(0.05)
+    parameters = {'x0':True}
+    return parameters
+
+
+@celery.task
+def parseParameter(parameters):
+    """Background task to send an email with Flask-Mail."""
+    print("----in parseParameter task!-----")
+
+    time.sleep(0.03)
+    parameters_json = json.dumps(parameters)
+    return parameters_json
+
+
+@celery.task
+def uploadMES(parameters_json):
+    """Background task to send an email with Flask-Mail."""
+    print("----in uploadMES task!-----")
+
+    time.sleep(0.02)
+
+    return 'upload succeefully!'
+
 
 
 @celery.task
@@ -62,18 +167,26 @@ def long_task(self):
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'GET':
-        return render_template('index.html', email=session.get('email', ''))
-    email = request.form['email']
-    session['email'] = email
+        return render_template('index.html', device_id=session.get('device_id', ''))
+    device_id = request.form['device_id']
+    print("device_id:", device_id)
+    session['device_id'] = device_id
 
-    # send the email
-    msg = Message('Hello from Flask',
-                  recipients=[request.form['email']])
-    msg.body = 'This is a test email sent from a background Celery task.'
+    # # send the email
+    # msg = Message('Hello from Flask',
+    #               recipients=[request.form['email']])
+    # msg.body = 'This is a test email sent from a background Celery task.'
+    # print(msg.body)
+
     if request.form['submit'] == 'Send':
         # send right away
-        send_async_email.delay(msg)
-        flash('Sending email to {0}'.format(email))
+        # send_async_email.delay(msg)
+        print("ready to query!")
+        for i in range(1):
+            # query_device.apply_async(args=[int(device_id)])
+            query_device.delay(int(device_id))
+            time.sleep(1)
+        flash('Quering device {0}'.format(device_id))
     else:
         # send in one minute
         send_async_email.apply_async(args=[msg], countdown=60)
